@@ -21,6 +21,11 @@ public:
             return;
         }
 
+        // Check if this log level should be written based on build type
+        // if (!ShouldLog(level)) {
+        //     return;
+        // }
+
         // Get current time
         time_t now = time(nullptr);
         struct tm timeinfo;
@@ -106,6 +111,17 @@ public:
     }
 
 private:
+    // Determine if a log level should be logged based on build type
+    bool ShouldLog(const std::string& level) const {
+#ifdef _DEBUG
+        // In Debug build, log everything
+        return true;
+#else
+        // In Release build, only log warnings and errors
+        return (level == "WARN" || level == "ERROR");
+#endif
+    }
+
     // Helper to format bytes for display
     std::string FormatBytes(size_t bytes) {
         const char* units[] = {"B", "KB", "MB", "GB"};
@@ -122,12 +138,16 @@ private:
     }
 
     Logger() {
-        // Create log file in Documents folder using environment variable
-        const char* userProfile = std::getenv("USERPROFILE");
-        if (userProfile) {
-            logPath = std::string(userProfile) + "\\Documents\\FileExplorer_Debug.log";
+        // Create log file in AppData\Local\FileExplorer using environment variable
+        const char* appDataLocal = std::getenv("LOCALAPPDATA");
+        if (appDataLocal) {
+            logPath = std::string(appDataLocal) + "\\FileExplorer\\log_FileExplorer.txt";
+
+            // Create directory if it doesn't exist
+            std::string dirPath = std::string(appDataLocal) + "\\FileExplorer";
+            CreateDirectoryA(dirPath.c_str(), nullptr);
         } else {
-            logPath = "FileExplorer_Debug.log";
+            logPath = "log_FileExplorer.txt";
         }
 
         logFile.open(logPath, std::ios::app);
@@ -151,9 +171,16 @@ private:
     size_t logEntryCount = 0;      // Number of log entries written
 };
 
+#ifdef _DEBUG
 #define LOG_INFO(msg) Logger::Instance().LogInfo(msg, __FUNCTION__, __LINE__)
-#define LOG_ERROR(msg) Logger::Instance().LogError(msg, __FUNCTION__, __LINE__)
-#define LOG_WARNING(msg) Logger::Instance().LogWarning(msg, __FUNCTION__, __LINE__)
 #define LOG_DEBUG(msg) Logger::Instance().LogDebug(msg, __FUNCTION__, __LINE__)
+#else
+#define LOG_INFO(msg) 
+#define LOG_DEBUG(msg) 
+#endif
+
+#define LOG_WARNING(msg) Logger::Instance().LogWarning(msg, __FUNCTION__, __LINE__)
+#define LOG_ERROR(msg) Logger::Instance().LogError(msg, __FUNCTION__, __LINE__)
+
 
 #endif // LOGGER_H

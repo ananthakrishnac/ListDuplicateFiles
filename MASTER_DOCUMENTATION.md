@@ -989,7 +989,7 @@ CREATE TABLE file_metadata (
 
 ### Assets
 - SVG/, icons/, resources/
-
+SVG files: https://github.com/icons8/flat-color-icons Converted from SVG to ICO: https://cloudconvert.com/svg-to-ico
 ### Documentation
 - MASTER_DOCUMENTATION.md (this file)
 - Backup of other docs if needed
@@ -1003,6 +1003,7 @@ CREATE TABLE file_metadata (
 ### System Diagram
 ```
 App ← MainForm ← FileScanner, DatabaseManager, MemoryTracker
+                         ↓
                          ↓
                     SQLite3 DB
 ```
@@ -2389,7 +2390,7 @@ link.exe *.obj lib/sqlite3.lib /OUT:FileExplorer.exe /SUBSYSTEM:WINDOWS
 ```
 
 ### Dependencies
-- External: sqlite3.lib, sqlite3.dll
+- External: sqlite3.lib, sqlite3.dll - https://sqlite.org/2026/sqlite-amalgamation-3510200.zip, https://sqlite.org/2026/sqlite-dll-win-x64-3510200.zip, https://sqlite.org/2026/sqlite-tools-win-x64-3510200.zip
 - Windows: user32, shell32, comctl32, psapi
 
 ### Build Variations

@@ -1,0 +1,61 @@
+# Build directories
+x64/
+x32/
+Debug/
+Release/
+.vs/
+FileExplorer/
+
+# Build artifacts
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache and temp files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.claude/
+
+# Temporary documentation files
+CLEANUP_SUMMARY.txt
+FINAL_VERIFICATION.txt
+MEMORY_ANALYSIS.txt
+READY_TO_REBUILD.txt
+STOP_SCAN_TODO_SUMMARY.txt
+*.bat
+*.ps1
+
+# SQLite build artifacts (keep sources in separate docs)
+sqlite-dll-win-x64-*/
+sqlite-tools-win-x64-*/
+sqlite-src-*/
+sqlite-amalgamation-*/
+
+# Archive files (large downloads)
+*.zip
+*.7z
+*.tar.gz
+
+# Log files
+*.log
+
+# IDE files
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters

@@ -1,0 +1,44 @@
+IMPORTANT: Missing sqlite3.lib File
+
+This folder contains:
+- sqlite3.dll (SQLite runtime DLL) ✓
+- sqlite3.def (Definition file) ✓
+- sqlite3.h (Header file) ✓
+- sqlite3.lib (NEEDS TO BE CREATED) ✗
+
+TO FIX THIS:
+
+Method 1: Use Visual Studio Developer Command Prompt (RECOMMENDED)
+1. Open "Developer Command Prompt for Visual Studio 2022"
+2. Navigate to: C:\Anantha_Data\Anantha-Code-Backup\FileLists\lib
+3. Run: lib /DEF:sqlite3.def /OUT:sqlite3.lib
+4. This creates sqlite3.lib
+
+Method 2: Download Pre-built
+1. Go to https://www.sqlite.org/download.html
+2. Download "sqlite-amalgamation-3510200.zip" or similar
+3. Extract the files
+4. Copy the pre-compiled sqlite3.lib to this folder
+
+Method 3: Use Online Tool
+1. Visit: https://sqlite.org/download.html
+2. Find pre-compiled Windows binaries
+3. Download and extract
+4. Copy sqlite3.lib to this folder
+
+WHAT YOU NEED:
+The sqlite3.lib file is a compiled library stub that links the DLL at compile time.
+Without it, the project will fail to compile with "unresolved external symbol" errors.
+
+STATUS:
+- sqlite3.dll: Present (3.03 MB)
+- sqlite3.def: Present (6.6 KB)
+- sqlite3.h: Present (5.8 KB)
+- sqlite3.lib: MISSING - Creates link stub
+
+NEXT STEPS:
+1. Create sqlite3.lib using one of the methods above
+2. Once created, delete this file
+3. Build the project: Ctrl + Shift + B
+
+For more help, see TROUBLESHOOTING_FAQ.md section on build errors.

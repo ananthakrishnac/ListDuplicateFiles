@@ -76,17 +76,41 @@ std::vector<FileMetadata> FileScanner::ScanDirectoryInternal(const std::string& 
             return results;
         }
 
+        // Add UNC long path prefix if path is absolute and not already prefixed
+        // This allows paths longer than MAX_PATH (260 chars)
+        // Note: We need to account for the wildcard \* being added (2 chars), so check for >= 259
+        size_t pathStrLen = wcslen(widePath);
+        std::wstring longPathPrefix = L"";
+        bool isUNCPath = (wcsncmp(widePath, L"\\\\", 2) == 0);
+        bool hasPrefix = (wcsncmp(widePath, L"\\\\?\\", 4) == 0);
+
+        if ((pathStrLen + 2) >= 260 && !isUNCPath && !hasPrefix) {
+            // Path + wildcard will be >= 260, not a UNC path, and doesn't already have the prefix
+            longPathPrefix = L"\\\\?\\";
+        }
+
+        if (pathStrLen > 200) {  // Only log very long paths
+            LOG_DEBUG("Path length: " + std::to_string(pathStrLen) + ", With wildcard: " + std::to_string(pathStrLen + 2) + ", IsUNC: " + (isUNCPath ? std::string("Yes") : std::string("No")) + ", HasPrefix: " + (hasPrefix ? std::string("Yes") : std::string("No")) + ", Adding prefix: " + (longPathPrefix.empty() ? std::string("No") : std::string("Yes")) + " - Path: " + folderPath);
+        }
+
         // Add wildcard for searching - use dynamic allocation for deep paths
         // Fix for: Buffer overflow when path exceeds MAX_PATH (260 chars)
-        size_t pathLen = wcslen(widePath) + 3;  // +2 for \*, +1 for null terminator
+        size_t pathLen = longPathPrefix.length() + pathStrLen + 3;  // +2 for \*, +1 for null terminator
         searchPath = new wchar_t[pathLen];
         if (!searchPath) {
             LOG_ERROR("Failed to allocate memory for searchPath");
+            delete[] widePath;
             return results;
         }
 
-        if (wcscpy_s(searchPath, pathLen, widePath) != 0) {
-            LOG_ERROR("wcscpy_s failed for searchPath");
+        if (wcscpy_s(searchPath, pathLen, longPathPrefix.c_str()) != 0) {
+            LOG_ERROR("wcscpy_s failed for searchPath with prefix");
+            delete[] widePath;
+            delete[] searchPath;
+            return results;
+        }
+        if (wcscat_s(searchPath, pathLen, widePath) != 0) {
+            LOG_ERROR("wcscat_s failed adding widePath");
             delete[] widePath;
             delete[] searchPath;
             return results;
@@ -98,12 +122,27 @@ std::vector<FileMetadata> FileScanner::ScanDirectoryInternal(const std::string& 
             return results;
         }
 
+        // Convert search path to string for logging (skip \\?\ prefix if present for readability)
+        wchar_t* logPath = searchPath;
+        if (wcsncmp(searchPath, L"\\\\?\\", 4) == 0) {
+            logPath = searchPath + 4;  // Skip the \\?\ prefix for logging
+        }
+
+        int searchPathSize = WideCharToMultiByte(CP_UTF8, 0, logPath, -1, nullptr, 0, nullptr, nullptr);
+        std::string searchPathStr;
+        if (searchPathSize > 0) {
+            searchPathStr.resize(searchPathSize - 1);
+            WideCharToMultiByte(CP_UTF8, 0, logPath, -1, &searchPathStr[0], searchPathSize, nullptr, nullptr);
+        }
+
+        LOG_DEBUG("SearchPath: " + searchPathStr);
+
         WIN32_FIND_DATAW findData = {};
-        HANDLE findHandle = FindFirstFileW(searchPath, &findData);
+        HANDLE findHandle = FindFirstFileW(searchPath, &findData);  // Use original searchPath with prefix
 
         if (findHandle == INVALID_HANDLE_VALUE) {
             DWORD err = GetLastError();
-            LOG_ERROR("FindFirstFileW failed with error: " + std::to_string(err));
+            LOG_ERROR("FindFirstFileW failed with error: " + std::to_string(err) + " - SearchPath: " + searchPathStr + " - OriginalPath: " + folderPath);
             delete[] widePath;
             delete[] searchPath;
             return results;
@@ -154,7 +193,13 @@ std::vector<FileMetadata> FileScanner::ScanDirectoryInternal(const std::string& 
                 }
 
                 // Convert wide string to regular string safely
-                int size = WideCharToMultiByte(CP_UTF8, 0, fullPath, -1, nullptr, 0, nullptr, nullptr);
+                // Skip \\?\ prefix if present (don't include it in the path string)
+                wchar_t* pathToConvert = fullPath;
+                if (wcsncmp(fullPath, L"\\\\?\\", 4) == 0) {
+                    pathToConvert = fullPath + 4;  // Skip the \\?\ prefix
+                }
+
+                int size = WideCharToMultiByte(CP_UTF8, 0, pathToConvert, -1, nullptr, 0, nullptr, nullptr);
                 if (size <= 0) {
                     LOG_WARNING("WideCharToMultiByte size calculation failed");
                     delete[] fullPath;
@@ -163,7 +208,7 @@ std::vector<FileMetadata> FileScanner::ScanDirectoryInternal(const std::string& 
                 }
 
                 std::string fullPathStr(size - 1, 0);
-                if (WideCharToMultiByte(CP_UTF8, 0, fullPath, -1, &fullPathStr[0], size, nullptr, nullptr) <= 0) {
+                if (WideCharToMultiByte(CP_UTF8, 0, pathToConvert, -1, &fullPathStr[0], size, nullptr, nullptr) <= 0) {
                     LOG_WARNING("WideCharToMultiByte conversion failed");
                     delete[] fullPath;
                     errorCount++;
@@ -319,8 +364,53 @@ FileMetadata FileScanner::GetFileMetadata(const std::string& filePath) {
 
         metadata.fileType = GetFileType(metadata.extension);
 
-        // Get file info using Windows API
-        HANDLE fileHandle = CreateFileA(filePath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        // Convert UTF-8 path to wide string for CreateFileW
+        int wideSize = MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, nullptr, 0);
+        if (wideSize <= 0) {
+            LOG_WARNING("MultiByteToWideChar failed for file path conversion");
+            return metadata;
+        }
+
+        // Add UNC long path prefix if path exceeds MAX_PATH (260 chars)
+        std::wstring longPathPrefix = L"";
+        if (wideSize > 260 && filePath[0] != '\\') {
+            // Path is too long and not a UNC path, add \\?\ prefix
+            longPathPrefix = L"\\\\?\\";
+        }
+
+        wchar_t* widePath = new wchar_t[longPathPrefix.length() + wideSize];
+        if (!widePath) {
+            LOG_ERROR("Failed to allocate memory for widePath in GetFileMetadata");
+            return metadata;
+        }
+
+        // Copy prefix first if present
+        if (!longPathPrefix.empty()) {
+            wcscpy_s(widePath, longPathPrefix.length() + 1, longPathPrefix.c_str());
+        } else {
+            widePath[0] = L'\0';
+        }
+
+        if (MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, widePath + longPathPrefix.length(), wideSize) <= 0) {
+            LOG_WARNING("MultiByteToWideChar conversion failed for file path");
+            delete[] widePath;
+            return metadata;
+        }
+
+        // Get file attributes first (doesn't require opening the file)
+        DWORD fileAttr = GetFileAttributesW(widePath);
+        if (fileAttr != INVALID_FILE_ATTRIBUTES) {
+            metadata.attributes = "ReadOnly: ";
+            metadata.attributes += (fileAttr & FILE_ATTRIBUTE_READONLY) ? "Yes" : "No";
+            LOG_DEBUG("File attributes: " + metadata.attributes);
+        } else {
+            LOG_WARNING("GetFileAttributesW failed");
+            delete[] widePath;
+            return metadata;
+        }
+
+        // Get file info using Windows API (use CreateFileW for proper Unicode support)
+        HANDLE fileHandle = CreateFileW(widePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 
         if (fileHandle != INVALID_HANDLE_VALUE) {
@@ -355,21 +445,13 @@ FileMetadata FileScanner::GetFileMetadata(const std::string& filePath) {
                 LOG_WARNING("GetFileTime failed");
             }
 
-            // Get file attributes
-            DWORD fileAttr = GetFileAttributesA(filePath.c_str());
-            if (fileAttr != INVALID_FILE_ATTRIBUTES) {
-                metadata.attributes = "ReadOnly: ";
-                metadata.attributes += (fileAttr & FILE_ATTRIBUTE_READONLY) ? "Yes" : "No";
-                LOG_DEBUG("File attributes: " + metadata.attributes);
-            } else {
-                LOG_WARNING("GetFileAttributesA failed");
-            }
-
             CloseHandle(fileHandle);
         } else {
             DWORD err = GetLastError();
-            LOG_WARNING("CreateFileA failed with error: " + std::to_string(err));
+            LOG_WARNING("CreateFileW failed with error: " + std::to_string(err) + " - Path: " + filePath);
         }
+
+        delete[] widePath;
 
         // Check if image and get dimensions
         if (metadata.fileType == "Image") {
@@ -490,6 +572,7 @@ void FileScanner::ScanDirectoryInternalStreaming(const std::string& folderPath,
                                                 std::vector<FileMetadata>& batch,
                                                 size_t& totalCount) {
     LOG_DEBUG("ScanDirectoryInternalStreaming START - Path: " + folderPath);
+    LOG_DEBUG("ScanDirectoryInternalStreaming - Input path length: " + std::to_string(folderPath.length()));
 
     const size_t BATCH_SIZE = 100;
     wchar_t* widePath = nullptr;
@@ -526,8 +609,25 @@ void FileScanner::ScanDirectoryInternalStreaming(const std::string& folderPath,
             return;
         }
 
+        // Add UNC long path prefix if path is absolute and not already prefixed
+        // This allows paths longer than MAX_PATH (260 chars)
+        // Note: We need to account for the wildcard \* being added (2 chars), so check for >= 259
+        size_t pathStrLen = wcslen(widePath);
+        std::wstring longPathPrefix = L"";
+        bool isUNCPath = (wcsncmp(widePath, L"\\\\", 2) == 0);
+        bool hasPrefix = (wcsncmp(widePath, L"\\\\?\\", 4) == 0);
+
+        if ((pathStrLen + 2) >= 260 && !isUNCPath && !hasPrefix) {
+            // Path + wildcard will be >= 260, not a UNC path, and doesn't already have the prefix
+            longPathPrefix = L"\\\\?\\";
+        }
+
+        if (pathStrLen > 200) {  // Only log very long paths
+            LOG_DEBUG("Streaming - LONG PATH - Input path length: " + std::to_string(pathStrLen) + ", With wildcard: " + std::to_string(pathStrLen + 2) + ", IsUNC: " + (isUNCPath ? std::string("Yes") : std::string("No")) + ", HasPrefix: " + (hasPrefix ? std::string("Yes") : std::string("No")) + ", Adding prefix: " + (longPathPrefix.empty() ? std::string("No") : std::string("Yes")) + " - Path: " + folderPath);
+        }
+
         // Add wildcard for search
-        size_t pathLen = wcslen(widePath) + 3;
+        size_t pathLen = longPathPrefix.length() + pathStrLen + 3;
         searchPath = new wchar_t[pathLen];
         if (!searchPath) {
             LOG_ERROR("Failed to allocate memory for searchPath in streaming scan");
@@ -535,7 +635,8 @@ void FileScanner::ScanDirectoryInternalStreaming(const std::string& folderPath,
             return;
         }
 
-        if (wcscpy_s(searchPath, pathLen, widePath) != 0 ||
+        if (wcscpy_s(searchPath, pathLen, longPathPrefix.c_str()) != 0 ||
+            wcscat_s(searchPath, pathLen, widePath) != 0 ||
             wcscat_s(searchPath, pathLen, L"\\*") != 0) {
             LOG_ERROR("Path concatenation failed for streaming scan");
             delete[] widePath;
@@ -543,12 +644,32 @@ void FileScanner::ScanDirectoryInternalStreaming(const std::string& folderPath,
             return;
         }
 
+        // Convert search path to string for logging (skip \\?\ prefix if present for readability)
+        wchar_t* logPath = searchPath;
+        if (wcsncmp(searchPath, L"\\\\?\\", 4) == 0) {
+            logPath = searchPath + 4;  // Skip the \\?\ prefix for logging
+        }
+
+        int searchPathSize = WideCharToMultiByte(CP_UTF8, 0, logPath, -1, nullptr, 0, nullptr, nullptr);
+        std::string searchPathStr;
+        if (searchPathSize > 0) {
+            searchPathStr.resize(searchPathSize - 1);
+            WideCharToMultiByte(CP_UTF8, 0, logPath, -1, &searchPathStr[0], searchPathSize, nullptr, nullptr);
+        }
+
+        LOG_DEBUG("SearchPath: " + searchPathStr);
+
         WIN32_FIND_DATAW findData = {};
-        findHandle = FindFirstFileW(searchPath, &findData);
+        findHandle = FindFirstFileW(searchPath, &findData);  // Use original searchPath with prefix
 
         if (findHandle == INVALID_HANDLE_VALUE) {
             DWORD err = GetLastError();
-            LOG_ERROR("FindFirstFileW failed: " + std::to_string(err));
+            // Error 5 = ACCESS_DENIED (skip with warning instead of error for protected system folders)
+            if (err == 5) {
+                LOG_WARNING("FindFirstFileW failed (Access Denied): " + std::to_string(err) + " - Path: " + folderPath);
+            } else {
+                LOG_ERROR("FindFirstFileW failed: " + std::to_string(err) + " - SearchPath: " + searchPathStr + " - OriginalPath: " + folderPath);
+            }
             delete[] widePath;
             delete[] searchPath;
             return;
@@ -584,7 +705,13 @@ void FileScanner::ScanDirectoryInternalStreaming(const std::string& folderPath,
                 }
 
                 // Convert to regular string
-                int size = WideCharToMultiByte(CP_UTF8, 0, fullPath, -1, nullptr, 0, nullptr, nullptr);
+                // Skip \\?\ prefix if present (don't include it in the path string)
+                wchar_t* pathToConvert = fullPath;
+                if (wcsncmp(fullPath, L"\\\\?\\", 4) == 0) {
+                    pathToConvert = fullPath + 4;  // Skip the \\?\ prefix
+                }
+
+                int size = WideCharToMultiByte(CP_UTF8, 0, pathToConvert, -1, nullptr, 0, nullptr, nullptr);
                 if (size <= 0) {
                     LOG_WARNING("WideCharToMultiByte size calculation failed in streaming scan");
                     delete[] fullPath;
@@ -592,7 +719,7 @@ void FileScanner::ScanDirectoryInternalStreaming(const std::string& folderPath,
                 }
 
                 std::string fullPathStr(size - 1, 0);
-                if (WideCharToMultiByte(CP_UTF8, 0, fullPath, -1, &fullPathStr[0], size, nullptr, nullptr) <= 0) {
+                if (WideCharToMultiByte(CP_UTF8, 0, pathToConvert, -1, &fullPathStr[0], size, nullptr, nullptr) <= 0) {
                     LOG_WARNING("WideCharToMultiByte conversion failed in streaming scan");
                     delete[] fullPath;
                     continue;

@@ -4,6 +4,7 @@
 #include "..\include\UIHelpers.h"
 #include "..\include\IconLoader.h"
 #include "..\include\MemoryTracker.h"
+#include "..\resources\resource.h"
 #include <commctrl.h>
 #include <shlobj.h>
 #include <shellapi.h>
@@ -19,6 +20,11 @@
 // Macros for extracting coordinates from WM_SIZE lParam
 #define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
 #define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
+
+// Enable modern visual styles
+#pragma comment(linker,"\"/manifestdependency:type='win32' \
+name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 MainForm::MainForm() : hMainWindow(nullptr), fileScanner(std::make_unique<FileScanner>()),
                         dbManager(std::make_unique<DatabaseManager>()) {}
@@ -57,14 +63,21 @@ MainForm::~MainForm() {
 bool MainForm::Create() {
     LOG_INFO("MainForm::Create START");
     try {
+        // Initialize Common Controls for modern UI
+        INITCOMMONCONTROLSEX icce = { sizeof(icce), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES };
+        InitCommonControlsEx(&icce);
+
         // Register window class with modern styling
         WNDCLASSEX wcex = {};
         wcex.cbSize = sizeof(WNDCLASSEX);
         wcex.style = CS_HREDRAW | CS_VREDRAW;
         wcex.lpfnWndProc = WndProc;
         wcex.hInstance = GetModuleHandle(nullptr);
-        wcex.hIcon = IconManager::GetFolderIcon();  // Use folder icon for window
-        wcex.hIconSm = IconManager::GetFolderIcon();  // Small icon for taskbar
+
+        // Load application icon from resources
+        HICON hAppIcon = LoadIconW(GetModuleHandle(nullptr), MAKEINTRESOURCEW(IDI_APPLICATIONICON));
+        wcex.hIcon = hAppIcon ? hAppIcon : IconManager::GetFolderIcon();  // Use resource icon or fallback
+        wcex.hIconSm = hAppIcon ? hAppIcon : IconManager::GetFolderIcon();  // Small icon for taskbar
         wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wcex.hbrBackground = CreateSolidBrush(UIColors::BACKGROUND);
         wcex.lpszClassName = L"FileExplorerWindow";
@@ -77,7 +90,7 @@ bool MainForm::Create() {
         LOG_INFO("Window class registered");
 
         // Create main window with modern dimensions
-        hMainWindow = CreateWindowEx(WS_EX_APPWINDOW, L"FileExplorerWindow",
+        hMainWindow = CreateWindowExW(WS_EX_APPWINDOW, L"FileExplorerWindow",
                                      L"File Explorer - Database Manager",
                                      WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                                      LayoutHelper::GetWindowWidth(), LayoutHelper::GetWindowHeight(), nullptr, nullptr,
@@ -139,7 +152,7 @@ void MainForm::OnWindowResize(int width, int height) {
     // ===== ROW 1: Folder Path =====
     // Label with modern styling
     if (!hPathEdit) {  // Only create once
-        HWND hPathLabel = CreateWindowEx(0, L"STATIC", L"📁  Folder Path:",
+        HWND hPathLabel = CreateWindowExW(0, L"STATIC", L"Folder Path:",
                                           WS_CHILD | WS_VISIBLE,
                                           xMargin, currentY, 120, controlHeight, hMainWindow, nullptr,
                                           GetModuleHandle(nullptr), nullptr);
@@ -151,7 +164,7 @@ void MainForm::OnWindowResize(int width, int height) {
     int pathInputWidth = contentWidth - browseButtonWidth - 10;  // 10px gap
 
     if (!hPathEdit) {
-        hPathEdit = CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        hPathEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                                   xMargin + 120, currentY, pathInputWidth - 120, controlHeight, hMainWindow, nullptr,
                                   GetModuleHandle(nullptr), nullptr);
@@ -160,13 +173,31 @@ void MainForm::OnWindowResize(int width, int height) {
         MoveWindow(hPathEdit, xMargin + 120, currentY, pathInputWidth - 120, controlHeight, TRUE);
     }
 
-    // Browse button on the right
+    // Browse button on the right - displays opened_folder icon with "Browse" text
     if (!hBrowseButton) {
-        hBrowseButton = CreateWindowEx(0, L"BUTTON", L"Browse",
+        hBrowseButton = CreateWindowExW(0, L"BUTTON", L"Browse",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                                        xMargin + pathInputWidth, currentY, browseButtonWidth, controlHeight,
                                        hMainWindow, (HMENU)1001, GetModuleHandle(nullptr), nullptr);
         ButtonStyler::SetSecondaryStyle(hBrowseButton);
+
+        // Load opened_folder icon from file and display on button
+        HICON hIcon = (HICON)LoadImageW(nullptr, L"icons\\opened_folder.ico",
+                                         IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+        if (hIcon) {
+            // Use BCM_SETIMAGELIST to show both icon and text correctly in modern UI
+            HIMAGELIST hImgList = ImageList_Create(32, 32, ILC_COLOR32 | ILC_MASK, 1, 1);
+            ImageList_AddIcon(hImgList, hIcon);
+            
+            BUTTON_IMAGELIST bil = { 0 };
+            bil.himl = hImgList;
+            bil.margin.left = 4;
+            bil.margin.right = 4;
+            bil.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+            
+            SendMessage(hBrowseButton, BCM_SETIMAGELIST, 0, (LPARAM)&bil);
+            // DestroyIcon(hIcon); // hImgList takes a copy, but we should be careful with HICON lifetime if it's from LoadImage
+        }
     } else {
         MoveWindow(hBrowseButton, xMargin + pathInputWidth, currentY, browseButtonWidth, controlHeight, TRUE);
     }
@@ -175,7 +206,7 @@ void MainForm::OnWindowResize(int width, int height) {
 
     // ===== ROW 2: File Extensions =====
     if (!hFileTypeEdit) {
-        HWND hExtLabel = CreateWindowEx(0, L"STATIC", L"📄  File Types (comma-separated):",
+        HWND hExtLabel = CreateWindowExW(0, L"STATIC", L"File Types (comma-separated):",
                                          WS_CHILD | WS_VISIBLE,
                                          xMargin, currentY, 300, controlHeight, hMainWindow, nullptr,
                                          GetModuleHandle(nullptr), nullptr);
@@ -183,7 +214,7 @@ void MainForm::OnWindowResize(int width, int height) {
     }
 
     if (!hFileTypeEdit) {
-        hFileTypeEdit = CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"jpg,png,pdf,docx,txt",
+        hFileTypeEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"jpg,png,pdf,docx,txt",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                                        xMargin + 300, currentY, contentWidth - 300, controlHeight, hMainWindow, nullptr,
                                        GetModuleHandle(nullptr), nullptr);
@@ -196,7 +227,7 @@ void MainForm::OnWindowResize(int width, int height) {
 
     // ===== ROW 3: Include Subdirectories Checkbox =====
     if (!hIncludeSubdirCheckbox) {
-        hIncludeSubdirCheckbox = CreateWindowEx(0, L"BUTTON", L"✓  Include Subdirectories",
+        hIncludeSubdirCheckbox = CreateWindowExW(0, L"BUTTON", L"\u2713  Include Subdirectories", // \u2713 is CHECK MARK (✓)
                                                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
                                                xMargin, currentY, 350, controlHeight, hMainWindow,
                                                (HMENU)1002, GetModuleHandle(nullptr), nullptr);
@@ -212,21 +243,55 @@ void MainForm::OnWindowResize(int width, int height) {
     int buttonWidth = (contentWidth - 10) / 2;  // Two buttons with 10px gap
 
     if (!hScanButton) {
-        hScanButton = CreateWindowEx(0, L"BUTTON", L"🔍  SCAN DIRECTORY",
+        hScanButton = CreateWindowExW(0, L"BUTTON", L"SCAN DIRECTORY",
                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                                     xMargin, currentY, buttonWidth, buttonHeight, hMainWindow,
                                     (HMENU)1000, GetModuleHandle(nullptr), nullptr);
         ButtonStyler::SetPrimaryStyle(hScanButton);
+
+        // Load search icon from file and display on button with text
+        HICON hIcon = (HICON)LoadImageW(nullptr, L"icons\\search.ico",
+                                         IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+        if (hIcon) {
+            // Use BCM_SETIMAGELIST to show both icon and text correctly in modern UI
+            HIMAGELIST hImgList = ImageList_Create(32, 32, ILC_COLOR32 | ILC_MASK, 1, 1);
+            ImageList_AddIcon(hImgList, hIcon);
+
+            BUTTON_IMAGELIST bil = { 0 };
+            bil.himl = hImgList;
+            bil.margin.left = 4;
+            bil.margin.right = 4;
+            bil.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+
+            SendMessage(hScanButton, BCM_SETIMAGELIST, 0, (LPARAM)&bil);
+        }
     } else {
         MoveWindow(hScanButton, xMargin, currentY, buttonWidth, buttonHeight, TRUE);
     }
 
     if (!hFindDuplicatesButton) {
-        hFindDuplicatesButton = CreateWindowEx(0, L"BUTTON", L"🔎  FIND DUPLICATES",
+        hFindDuplicatesButton = CreateWindowEx(0, L"BUTTON", L"FIND DUPLICATES",
                                               WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                                               xMargin + buttonWidth + 10, currentY, buttonWidth, buttonHeight, hMainWindow,
                                               (HMENU)1003, GetModuleHandle(nullptr), nullptr);
         ButtonStyler::SetSecondaryStyle(hFindDuplicatesButton);
+
+        // Load answers icon from file and display on button with text
+        HICON hIcon = (HICON)LoadImageW(nullptr, L"icons\\answers.ico",
+                                         IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+        if (hIcon) {
+            // Use BCM_SETIMAGELIST to show both icon and text correctly in modern UI
+            HIMAGELIST hImgList = ImageList_Create(32, 32, ILC_COLOR32 | ILC_MASK, 1, 1);
+            ImageList_AddIcon(hImgList, hIcon);
+
+            BUTTON_IMAGELIST bil = { 0 };
+            bil.himl = hImgList;
+            bil.margin.left = 4;
+            bil.margin.right = 4;
+            bil.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+
+            SendMessage(hFindDuplicatesButton, BCM_SETIMAGELIST, 0, (LPARAM)&bil);
+        }
     } else {
         MoveWindow(hFindDuplicatesButton, xMargin + buttonWidth + 10, currentY, buttonWidth, buttonHeight, TRUE);
     }
@@ -236,7 +301,7 @@ void MainForm::OnWindowResize(int width, int height) {
     // ===== ROW 5: Results Label =====
     HWND hResultsLabel = GetDlgItem(hMainWindow, 2000);  // Try to find existing label
     if (!hResultsLabel) {
-        hResultsLabel = CreateWindowEx(0, L"STATIC", L"📋  Results & Details:",
+        hResultsLabel = CreateWindowExW(0, L"STATIC", L"\U0001F4CB  Results & Details:", // \U0001F4CB is CLIPBOARD (📋)
                                        WS_CHILD | WS_VISIBLE,
                                        xMargin, currentY, 250, controlHeight, hMainWindow,
                                        (HMENU)2000, GetModuleHandle(nullptr), nullptr);
@@ -251,7 +316,7 @@ void MainForm::OnWindowResize(int width, int height) {
     int resultsHeight = height - currentY - xMargin - controlHeight - 10;  // Leave room for status bar
 
     if (!hResultsList) {
-        hResultsList = CreateWindowEx(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+        hResultsList = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
                                      WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL |
                                      LBS_NOINTEGRALHEIGHT | LBS_NOSEL,
                                      xMargin, currentY, contentWidth, resultsHeight, hMainWindow, nullptr,
@@ -265,7 +330,7 @@ void MainForm::OnWindowResize(int width, int height) {
 
     // ===== ROW 7: Status Bar (fixed at bottom) =====
     if (!hStatusBar) {
-        hStatusBar = CreateWindowEx(WS_EX_STATICEDGE, L"STATIC", L"✓ Ready",
+        hStatusBar = CreateWindowExW(WS_EX_STATICEDGE, L"STATIC", L"\u2713 Ready", // \u2713 is CHECK MARK (✓)
                                    WS_CHILD | WS_VISIBLE | SS_SUNKEN,
                                    xMargin, height - controlHeight - xMargin, contentWidth, controlHeight,
                                    hMainWindow, nullptr, GetModuleHandle(nullptr), nullptr);
@@ -339,7 +404,7 @@ void MainForm::OnBrowseClick() {
     if (pidl != nullptr) {
         WCHAR path[MAX_PATH];
         if (SHGetPathFromIDList(pidl, path)) {
-            SetWindowText(hPathEdit, path);
+            SetWindowTextW(hPathEdit, path);
         }
         CoTaskMemFree(pidl);
     }
@@ -448,15 +513,16 @@ void MainForm::OnScanClick() {
         lastScanPath = path;
         LOG_INFO("Saved scan path for resume: " + lastScanPath);
 
-        UpdateStatusBar("🔍  Scanning...  Please wait");
+        UpdateStatusBar(u8"\U0001F50D  Scanning...  Please wait"); // \U0001F50D is LEFT-POINTING MAGNIFYING GLASS (🔍)
         SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
 
         // Show initial message
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"🔍  Scanning in progress...");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)(L"📁  Path: " + std::wstring(path.begin(), path.end())).c_str());
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)(L"📄  Types: " + std::wstring(extStr.begin(), extStr.end())).c_str());
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"");
+        std::wstring separator = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F50D  Scanning in progress...").c_str()); // \U0001F50D is LEFT-POINTING MAGNIFYING GLASS (🔍)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)(Utf8ToUtf16(u8"\U0001F4C1  Path: ") + Utf8ToUtf16(path)).c_str()); // \U0001F4C1 is OPEN FILE FOLDER (📁)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)(Utf8ToUtf16(u8"\U0001F4C4  Types: ") + Utf8ToUtf16(extStr)).c_str()); // \U0001F4C4 is DOCUMENT (📄)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"");
 
         LOG_INFO("Starting background scan thread");
 
@@ -467,7 +533,7 @@ void MainForm::OnScanClick() {
 
         // Change button text to "Stop Scan"
         if (hScanButton) {
-            SetWindowText(hScanButton, L"⏹  STOP");
+            SetWindowTextW(hScanButton, L"\u23F9  STOP"); // \u23F9 is RECTANGULAR STOP (⏹)
         }
 
         // Scan in background thread
@@ -591,26 +657,22 @@ void MainForm::OnStopScanClick() {
 
         // Step 3: Change button text to "Resume Scan" immediately
         if (hScanButton) {
-            SetWindowText(hScanButton, L"Resume Scan");
+            SetWindowTextW(hScanButton, L"Resume Scan");
             LOG_INFO("Button changed to 'Resume Scan'");
         }
 
         // Step 4: Update status bar
-        std::string status = "⏸  Paused  |  " + std::to_string(filesScannedBeforeStop) + " files scanned";
+        std::string status = u8"\u23F8  Paused  |  " + std::to_string(filesScannedBeforeStop) + " files scanned"; // \u23F8 is PAUSE BUTTON (⏸)
         UpdateStatusBar(status);
         LOG_INFO("Status updated: " + status);
 
         // Step 5: Display stop message in ListBox
-        std::wstring stopMsg = L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)stopMsg.c_str());
-        stopMsg = L"⏸  Scan Paused";
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)stopMsg.c_str());
-        stopMsg = L"📊  Files Processed: " + std::to_wstring(filesScannedBeforeStop);
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)stopMsg.c_str());
-        stopMsg = L"💾  Click 'RESUME SCAN' to continue from this point";
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)stopMsg.c_str());
-        stopMsg = L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)stopMsg.c_str());
+        std::wstring separator = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\u23F8  Scan Paused").c_str()); // \u23F8 is PAUSE BUTTON (⏸)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)(Utf8ToUtf16(u8"\U0001F4CA  Files Processed: ") + std::to_wstring(filesScannedBeforeStop)).c_str()); // \U0001F4CA is BAR CHART (📊)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F4BE  Click 'RESUME SCAN' to continue from this point").c_str()); // \U0001F4BE is FLOPPY DISK (💾)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
 
         LOG_INFO("OnStopScanClick COMPLETE");
     } catch (const std::exception& ex) {
@@ -631,16 +693,17 @@ void MainForm::OnScanComplete() {
         int totalFiles = dbManager->GetTotalFileCount();
         LOG_INFO("OnScanComplete: Scan finished with " + std::to_string(totalFiles) + " files");
 
-        std::string status = "✓  Scan Complete  |  " + std::to_string(totalFiles) + " files stored";
+        std::string status = u8"\u2713  Scan Complete  |  " + std::to_string(totalFiles) + " files stored"; // \u2713 is CHECK MARK (✓)
         UpdateStatusBar(status);
 
         // Add beautiful summary to the ListBox
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"✓  Scan Complete!");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)(L"📊  Total Files: " + std::to_wstring(totalFiles)).c_str());
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"💾  All files stored in database");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"🔎  Click 'FIND DUPLICATES' to identify copies");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        std::wstring separator = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\u2713  Scan Complete!").c_str()); // \u2713 is CHECK MARK (✓)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)(Utf8ToUtf16(u8"\U0001F4CA  Total Files: ") + std::to_wstring(totalFiles)).c_str()); // \U0001F4CA is BAR CHART (📊)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F4BE  All files stored in database").c_str()); // \U0001F4BE is FLOPPY DISK (💾)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F50E  Click 'FIND DUPLICATES' to identify copies").c_str()); // \U0001F50E is RIGHT-POINTING MAGNIFYING GLASS (🔎)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
 
         // Signal that scan is no longer running
         isScanRunning = false;
@@ -649,7 +712,7 @@ void MainForm::OnScanComplete() {
 
         // Restore button to "Scan" (normal completion, not stopped)
         if (hScanButton) {
-            SetWindowText(hScanButton, L"🔍  SCAN DIRECTORY");
+            SetWindowTextW(hScanButton, L"\U0001F50D  SCAN DIRECTORY"); // \U0001F50D is LEFT-POINTING MAGNIFYING GLASS (🔍)
             LOG_INFO("Button restored to 'SCAN'");
         }
 
@@ -677,8 +740,8 @@ void MainForm::UpdateStatusBar(const std::string& message) {
         return;
     }
     try {
-        std::wstring wmessage(message.begin(), message.end());
-        SetWindowText(hStatusBar, wmessage.c_str());
+        std::wstring wmessage = Utf8ToUtf16(message);
+        SetWindowTextW(hStatusBar, wmessage.c_str());
         LOG_DEBUG("Status bar updated: " + message);
     } catch (const std::exception& ex) {
         LOG_ERROR("UpdateStatusBar exception: " + std::string(ex.what()));
@@ -705,8 +768,8 @@ void MainForm::DisplayResults(const std::vector<FileMetadata>& files) {
 
                 std::string displayStr = file.filename + "  [" + sizeStr +
                                          "]  (" + file.fileType + ")";
-                std::wstring wdisplay(displayStr.begin(), displayStr.end());
-                SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)wdisplay.c_str());
+                std::wstring wdisplay = Utf8ToUtf16(displayStr);
+                SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)wdisplay.c_str());
                 addedCount++;
             } catch (const std::exception& ex) {
                 LOG_ERROR("Error displaying file: " + std::string(ex.what()));
@@ -731,19 +794,20 @@ void MainForm::OnFindDuplicatesClick() {
             return;
         }
 
-        UpdateStatusBar("🔎  Searching for duplicates...");
+        UpdateStatusBar(u8"\U0001F50E  Searching for duplicates..."); // \U0001F50E is RIGHT-POINTING MAGNIFYING GLASS (🔎)
         LOG_INFO("Finding duplicates from database");
 
         // Find all duplicate files grouped by hash
         auto duplicateGroups = dbManager->FindDuplicates();
 
         if (duplicateGroups.empty()) {
-            UpdateStatusBar("✓  No duplicate files found");
+            UpdateStatusBar(u8"\u2713  No duplicate files found"); // \u2713 is CHECK MARK (✓)
             SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
-            SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"✓  All files are unique!");
-            SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"🎉  No duplicate files found in the database");
-            SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            std::wstring separator = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\u2713  All files are unique!").c_str()); // \u2713 is CHECK MARK (✓)
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F389  No duplicate files found in the database").c_str()); // \U0001F389 is PARTY POPPER (🎉)
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
             LOG_INFO("No duplicates found");
             return;
         }
@@ -751,16 +815,16 @@ void MainForm::OnFindDuplicatesClick() {
         LOG_INFO("Found " + std::to_string(duplicateGroups.size()) + " duplicate groups");
         DisplayDuplicates(duplicateGroups);
 
-        std::string status = "✓  Found " + std::to_string(duplicateGroups.size()) + " duplicate groups";
+        std::string status = u8"\u2713  Found " + std::to_string(duplicateGroups.size()) + " duplicate groups"; // \u2713 is CHECK MARK (✓)
         UpdateStatusBar(status);
         LOG_INFO("OnFindDuplicatesClick COMPLETE");
 
     } catch (const std::exception& ex) {
         LOG_ERROR("OnFindDuplicatesClick exception: " + std::string(ex.what()));
-        UpdateStatusBar("❌  Error during duplicate search");
+        UpdateStatusBar(u8"\u274C  Error during duplicate search"); // \u274C is CROSS MARK (❌)
     } catch (...) {
         LOG_ERROR("OnFindDuplicatesClick unknown exception");
-        UpdateStatusBar("❌  Unknown error during duplicate search");
+        UpdateStatusBar(u8"\u274C  Unknown error during duplicate search"); // \u274C is CROSS MARK (❌)
     }
 }
 
@@ -780,10 +844,11 @@ void MainForm::DisplayDuplicates(const std::vector<std::vector<FileMetadata>>& d
         int totalDuplicates = 0;
 
         // Add header
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)(L"🔎  DUPLICATE FILES FOUND: " + std::to_wstring(duplicateGroups.size()) + L" groups").c_str());
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"");
+        std::wstring headerSep = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)headerSep.c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)(Utf8ToUtf16(u8"\U0001F50E  DUPLICATE FILES FOUND: ") + std::to_wstring(duplicateGroups.size()) + L" groups").c_str()); // \U0001F50E is RIGHT-POINTING MAGNIFYING GLASS (🔎)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)headerSep.c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"");
 
         // Display each duplicate group
         for (const auto& group : duplicateGroups) {
@@ -798,11 +863,11 @@ void MainForm::DisplayDuplicates(const std::vector<std::vector<FileMetadata>>& d
             std::string hashVal = firstFile.hashVal;
 
             // Format: "📁 Group N: filename - X copies (HASH_PREFIX)"
-            std::string headerStr = "📁 Group " + std::to_string(groupNum) + ": " + filename +
+            std::string headerStr = u8"\U0001F4C1 Group " + std::to_string(groupNum) + ": " + filename + // \U0001F4C1 is OPEN FILE FOLDER (📁)
                                    " (" + std::to_string(group.size()) + " copies) [" +
                                    (hashVal.length() > 8 ? hashVal.substr(0, 8) : hashVal) + "]";
-            std::wstring wheader(headerStr.begin(), headerStr.end());
-            SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)wheader.c_str());
+            std::wstring wheader = Utf8ToUtf16(headerStr);
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)wheader.c_str());
 
             // Display each file in the group with its full path
             for (size_t i = 0; i < group.size(); i++) {
@@ -821,10 +886,10 @@ void MainForm::DisplayDuplicates(const std::vector<std::vector<FileMetadata>>& d
                 }
 
                 // Format: "  ▶ [N] full_path  [size]"
-                std::string pathStr = "   ▶ " + std::to_string(i + 1) + ".  " + file.fullPath +
+                std::string pathStr = u8"   \u25B6 " + std::to_string(i + 1) + ".  " + file.fullPath + // \u25B6 is BLACK RIGHT-POINTING TRIANGLE (▶)
                                      "  (" + sizeStr + ")";
-                std::wstring wpath(pathStr.begin(), pathStr.end());
-                SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)wpath.c_str());
+                std::wstring wpath = Utf8ToUtf16(pathStr);
+                SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)wpath.c_str());
 
                 LOG_INFO("Duplicate " + std::to_string(groupNum) + "." + std::to_string(i + 1) +
                         ": " + file.fullPath + " (" + sizeStr + ")");
@@ -835,9 +900,9 @@ void MainForm::DisplayDuplicates(const std::vector<std::vector<FileMetadata>>& d
         }
 
         // Add footer
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)(L"💡  Total: " + std::to_wstring(totalDuplicates) + L" duplicate files across " + std::to_wstring(groupNum) + L" groups").c_str());
-        SendMessage(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)headerSep.c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)(Utf8ToUtf16(u8"\U0001F4A1  Total: ") + std::to_wstring(totalDuplicates) + L" duplicate files across " + std::to_wstring(groupNum) + L" groups").c_str()); // \U0001F4A1 is ELECTRIC LIGHT BULB (💡)
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)headerSep.c_str());
 
         LOG_INFO("DisplayDuplicates COMPLETE - " + std::to_string(groupNum) + " groups, " +
                 std::to_string(totalDuplicates) + " total duplicate files");
@@ -856,4 +921,12 @@ int MainForm::Run() {
         DispatchMessage(&msg);
     }
     return (int)msg.wParam;
+}
+
+std::wstring MainForm::Utf8ToUtf16(const std::string& utf8Str) {
+    if (utf8Str.empty()) return L"";
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &utf8Str[0], (int)utf8Str.size(), NULL, 0);
+    std::wstring wstrTo(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &utf8Str[0], (int)utf8Str.size(), &wstrTo[0], size_needed);
+    return wstrTo;
 }

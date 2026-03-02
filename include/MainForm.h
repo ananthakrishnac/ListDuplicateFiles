@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <memory>
 #include <thread>
+#include <string>
 #include "FileScanner.h"
 #include "DatabaseManager.h"
 #include "FileMetadata.h"
@@ -14,6 +15,7 @@ public:
 
     bool Create();
     int Run();
+    std::wstring Utf8ToUtf16(const std::string& utf8Str);
 
 private:
     HWND hMainWindow;

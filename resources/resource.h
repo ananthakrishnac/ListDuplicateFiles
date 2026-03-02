@@ -1,0 +1,6 @@
+#ifndef IDC_STATIC
+#define IDC_STATIC (-1)
+#endif
+
+#define IDI_APPLICATIONICON 100
+#define IDI_BROWSEBUTTON 101

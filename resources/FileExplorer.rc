@@ -1,6 +1,10 @@
 // Resource file for File Explorer Application
 #include <windows.h>
 #include <winuser.h>
+#include "resource.h"
+
+// Icon resources
+IDI_APPLICATIONICON ICON "..\\icons\\Icon-FileExplorer.ico"
 
 // Version information
 VS_VERSION_INFO VERSIONINFO

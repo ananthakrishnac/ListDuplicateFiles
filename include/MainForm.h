@@ -40,6 +40,10 @@ private:
     volatile bool shouldResume = false;        // Flag to indicate resume mode
     std::string lastScanPath;                  // Path of last scan for resume
 
+    // Find Duplicates Thread Members
+    volatile bool isFindDuplicatesRunning = false;  // Flag to control find duplicates state
+    std::thread* pFindDuplicatesThread = nullptr;   // Pointer to background find duplicates thread
+
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
     void OnWindowResize(int width, int height);
@@ -52,6 +56,7 @@ private:
     void UpdateStatusBar(const std::string& message);
     void DisplayResults(const std::vector<FileMetadata>& files);
     void DisplayDuplicates(const std::vector<std::vector<FileMetadata>>& duplicateGroups);
+    void DisplayDuplicatesBatch(const std::vector<std::vector<FileMetadata>>& batch);
     void CreateControls();
     void RefreshFileTypeList();
 };

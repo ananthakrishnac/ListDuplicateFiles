@@ -688,6 +688,99 @@ std::vector<std::vector<FileMetadata>> DatabaseManager::FindDuplicates() {
     return duplicateGroups;
 }
 
+void DatabaseManager::FindDuplicatesStreaming(std::function<void(std::vector<std::vector<FileMetadata>>&)> callback) {
+    LOG_DEBUG("FindDuplicatesStreaming START");
+
+    if (!isConnected) {
+        LOG_WARNING("FindDuplicatesStreaming - Database not connected");
+        return;
+    }
+
+    if (!callback) {
+        LOG_ERROR("FindDuplicatesStreaming - Invalid callback");
+        return;
+    }
+
+    // Query: Find files with duplicate hash values (grouped)
+    const char* sql = R"(
+        SELECT hash_val, COUNT(*) as cnt FROM files
+        WHERE hash_val IS NOT NULL AND hash_val != ''
+        GROUP BY hash_val HAVING cnt > 1
+        ORDER BY cnt DESC;
+    )";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        LOG_ERROR("FindDuplicatesStreaming - Failed to prepare duplicate query");
+        return;
+    }
+
+    // Collect all duplicate hashes
+    std::vector<std::string> duplicateHashes;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* hashVal = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        int count = sqlite3_column_int(stmt, 1);
+        if (hashVal) {
+            duplicateHashes.push_back(hashVal);
+            LOG_DEBUG("Found duplicate hash: " + std::string(hashVal) + " (count: " + std::to_string(count) + ")");
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    LOG_INFO("FindDuplicatesStreaming - Total duplicate hashes: " + std::to_string(duplicateHashes.size()));
+
+    // Process duplicates in batches of 10 groups
+    const int BATCH_SIZE = 10;
+    std::vector<std::vector<FileMetadata>> batch;
+
+    for (size_t hashIndex = 0; hashIndex < duplicateHashes.size(); ++hashIndex) {
+        const auto& hash = duplicateHashes[hashIndex];
+        std::string querySql = "SELECT filename, full_path, extension, file_size, file_type, "
+                               "image_width, image_height, attributes, hash_val FROM files "
+                               "WHERE hash_val = ? ORDER BY filename;";
+
+        if (sqlite3_prepare_v2(db, querySql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+            LOG_ERROR("FindDuplicatesStreaming - Failed to prepare file query for hash");
+            continue;
+        }
+
+        sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
+
+        std::vector<FileMetadata> group;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            FileMetadata metadata;
+            metadata.filename = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            metadata.fullPath = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            metadata.extension = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            metadata.fileSize = sqlite3_column_int64(stmt, 3);
+            metadata.fileType = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+            metadata.imageWidth = sqlite3_column_int(stmt, 5);
+            metadata.imageHeight = sqlite3_column_int(stmt, 6);
+            metadata.attributes = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+            metadata.hashVal = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            group.push_back(metadata);
+        }
+
+        if (!group.empty()) {
+            batch.push_back(group);
+        }
+
+        sqlite3_finalize(stmt);
+
+        // When batch reaches size limit or we're at the last hash, invoke callback
+        if (batch.size() >= BATCH_SIZE || hashIndex == duplicateHashes.size() - 1) {
+            if (!batch.empty()) {
+                LOG_DEBUG("FindDuplicatesStreaming - Invoking callback with batch of " +
+                         std::to_string(batch.size()) + " groups");
+                callback(batch);
+                batch.clear();
+            }
+        }
+    }
+
+    LOG_INFO("FindDuplicatesStreaming COMPLETE");
+}
+
 bool DatabaseManager::ClearAllData() {
     if (!isConnected) return false;
 

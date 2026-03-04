@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <functional>
 #include <sqlite3.h>
 
 class DatabaseManager {
@@ -30,6 +31,10 @@ public:
 
     // Find duplicate files by hash value
     std::vector<std::vector<FileMetadata>> FindDuplicates();
+
+    // Find duplicates with streaming callback - processes results in batches
+    // Callback receives a batch of duplicate groups and is invoked multiple times
+    void FindDuplicatesStreaming(std::function<void(std::vector<std::vector<FileMetadata>>&)> callback);
 
     bool CreateTables();
     bool ClearAllData();

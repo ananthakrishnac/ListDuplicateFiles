@@ -30,29 +30,51 @@ MainForm::MainForm() : hMainWindow(nullptr), fileScanner(std::make_unique<FileSc
                         dbManager(std::make_unique<DatabaseManager>()) {}
 
 MainForm::~MainForm() {
-    // Clean up background thread if still running
+    // Clean up background scan thread if still running
     if (pScanThread != nullptr) {
         // Signal thread to stop
         isScanRunning = false;
-        LOG_INFO("Destructor: Stop signal sent to background thread");
+        LOG_INFO("Destructor: Stop signal sent to background scan thread");
 
         // Only join if thread is joinable (not detached)
         // If already detached (from OnStopScanClick), it will clean up on its own
         if (pScanThread->joinable()) {
-            LOG_INFO("Destructor: Waiting for thread to complete...");
+            LOG_INFO("Destructor: Waiting for scan thread to complete...");
             // Use a timeout approach - don't block indefinitely
             // Thread should exit quickly after isScanRunning is set to false
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             if (pScanThread->joinable()) {
                 pScanThread->join();
-                LOG_INFO("Destructor: Thread joined successfully");
+                LOG_INFO("Destructor: Scan thread joined successfully");
             }
         } else {
-            LOG_INFO("Destructor: Thread already detached, skipping join");
+            LOG_INFO("Destructor: Scan thread already detached, skipping join");
         }
 
         delete pScanThread;
         pScanThread = nullptr;
+    }
+
+    // Clean up background find duplicates thread if still running
+    if (pFindDuplicatesThread != nullptr) {
+        // Signal thread to stop
+        isFindDuplicatesRunning = false;
+        LOG_INFO("Destructor: Stop signal sent to background find duplicates thread");
+
+        // Only join if thread is joinable
+        if (pFindDuplicatesThread->joinable()) {
+            LOG_INFO("Destructor: Waiting for find duplicates thread to complete...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (pFindDuplicatesThread->joinable()) {
+                pFindDuplicatesThread->join();
+                LOG_INFO("Destructor: Find duplicates thread joined successfully");
+            }
+        } else {
+            LOG_INFO("Destructor: Find duplicates thread already detached, skipping join");
+        }
+
+        delete pFindDuplicatesThread;
+        pFindDuplicatesThread = nullptr;
     }
 
     if (hMainWindow) {
@@ -788,43 +810,129 @@ void MainForm::DisplayResults(const std::vector<FileMetadata>& files) {
 void MainForm::OnFindDuplicatesClick() {
     LOG_INFO("OnFindDuplicatesClick START");
     try {
+        // Prevent multiple concurrent duplicate searches
+        if (isFindDuplicatesRunning) {
+            LOG_WARNING("Find duplicates already in progress, ignoring new request");
+            return;
+        }
+
         if (!dbManager) {
             UpdateStatusBar("[ERROR] Database manager not available");
             LOG_ERROR("OnFindDuplicatesClick - Database manager is null");
             return;
         }
 
-        UpdateStatusBar(u8"\U0001F50E  Searching for duplicates..."); // \U0001F50E is RIGHT-POINTING MAGNIFYING GLASS (🔎)
-        LOG_INFO("Finding duplicates from database");
-
-        // Find all duplicate files grouped by hash
-        auto duplicateGroups = dbManager->FindDuplicates();
-
-        if (duplicateGroups.empty()) {
-            UpdateStatusBar(u8"\u2713  No duplicate files found"); // \u2713 is CHECK MARK (✓)
-            SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
-            std::wstring separator = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
-            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
-            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\u2713  All files are unique!").c_str()); // \u2713 is CHECK MARK (✓)
-            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F389  No duplicate files found in the database").c_str()); // \U0001F389 is PARTY POPPER (🎉)
-            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
-            LOG_INFO("No duplicates found");
+        if (!hResultsList) {
+            LOG_ERROR("OnFindDuplicatesClick - ResultsList handle is null");
             return;
         }
 
-        LOG_INFO("Found " + std::to_string(duplicateGroups.size()) + " duplicate groups");
-        DisplayDuplicates(duplicateGroups);
+        // Disable Find Duplicates button to prevent concurrent clicks
+        if (hFindDuplicatesButton) {
+            EnableWindow(hFindDuplicatesButton, FALSE);
+            SetWindowTextW(hFindDuplicatesButton, L"\U0001F50E  Searching..."); // \U0001F50E is RIGHT-POINTING MAGNIFYING GLASS (🔎)
+        }
 
-        std::string status = u8"\u2713  Found " + std::to_string(duplicateGroups.size()) + " duplicate groups"; // \u2713 is CHECK MARK (✓)
-        UpdateStatusBar(status);
-        LOG_INFO("OnFindDuplicatesClick COMPLETE");
+        UpdateStatusBar(u8"\U0001F50E  Searching for duplicates..."); // \U0001F50E is RIGHT-POINTING MAGNIFYING GLASS (🔎)
+        LOG_INFO("Starting background find duplicates thread");
+
+        // Clear previous results
+        SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
+
+        // Show initial message
+        std::wstring separator = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F50E  Searching for duplicates...").c_str());
+        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"");
+
+        // Set flag to indicate operation is running
+        isFindDuplicatesRunning = true;
+
+        // Find duplicates in background thread
+        pFindDuplicatesThread = new std::thread([this]() {
+            try {
+                LOG_INFO("Background thread: Starting duplicate search");
+
+                // Check if operation was cancelled before thread started
+                if (!isFindDuplicatesRunning) {
+                    LOG_INFO("Duplicate search cancelled before start");
+                    return;
+                }
+
+                int totalGroups = 0;
+
+                // Use streaming callback to process duplicates in batches
+                dbManager->FindDuplicatesStreaming([this, &totalGroups](std::vector<std::vector<FileMetadata>>& batch) {
+                    // Check if operation was cancelled
+                    if (!isFindDuplicatesRunning) {
+                        LOG_INFO("Duplicate search cancelled during processing");
+                        return;
+                    }
+
+                    totalGroups += static_cast<int>(batch.size());
+                    LOG_DEBUG("Background thread: Processing batch of " + std::to_string(batch.size()) + " groups");
+
+                    // Update status bar with current progress
+                    std::string status = "Processing duplicate batch... " + std::to_string(totalGroups) + " groups found";
+                    UpdateStatusBar(status);
+
+                    // Display batch results
+                    DisplayDuplicatesBatch(batch);
+                });
+
+                // Duplicate search complete
+                if (isFindDuplicatesRunning) {
+                    if (totalGroups == 0) {
+                        UpdateStatusBar(u8"\u2713  No duplicate files found"); // \u2713 is CHECK MARK (✓)
+                        SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
+                        std::wstring separator = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+                        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
+                        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\u2713  All files are unique!").c_str());
+                        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(u8"\U0001F389  No duplicate files found in the database").c_str()); // \U0001F389 is PARTY POPPER (🎉)
+                        SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)separator.c_str());
+                    } else {
+                        std::string status = u8"\u2713  Found " + std::to_string(totalGroups) + " duplicate groups"; // \u2713 is CHECK MARK (✓)
+                        UpdateStatusBar(status);
+                        LOG_INFO("Duplicate search complete - Found " + std::to_string(totalGroups) + " groups");
+                    }
+                }
+
+            } catch (const std::exception& ex) {
+                LOG_ERROR("Background thread duplicate search exception: " + std::string(ex.what()));
+                UpdateStatusBar(u8"\u274C  Error during duplicate search"); // \u274C is CROSS MARK (❌)
+            } catch (...) {
+                LOG_ERROR("Background thread duplicate search unknown exception");
+                UpdateStatusBar(u8"\u274C  Unknown error during duplicate search");
+            }
+
+            // Reset the running flag and re-enable button
+            isFindDuplicatesRunning = false;
+            if (hFindDuplicatesButton) {
+                EnableWindow(hFindDuplicatesButton, TRUE);
+                SetWindowTextW(hFindDuplicatesButton, L"\U0001F50E  Find Duplicates"); // \U0001F50E is RIGHT-POINTING MAGNIFYING GLASS (🔎)
+            }
+
+            LOG_INFO("Background thread: Duplicate search complete");
+        });
+
+        LOG_INFO("OnFindDuplicatesClick COMPLETE - Thread launched");
 
     } catch (const std::exception& ex) {
         LOG_ERROR("OnFindDuplicatesClick exception: " + std::string(ex.what()));
         UpdateStatusBar(u8"\u274C  Error during duplicate search"); // \u274C is CROSS MARK (❌)
+        isFindDuplicatesRunning = false;
+        if (hFindDuplicatesButton) {
+            EnableWindow(hFindDuplicatesButton, TRUE);
+            SetWindowTextW(hFindDuplicatesButton, L"\U0001F50E  Find Duplicates");
+        }
     } catch (...) {
         LOG_ERROR("OnFindDuplicatesClick unknown exception");
-        UpdateStatusBar(u8"\u274C  Unknown error during duplicate search"); // \u274C is CROSS MARK (❌)
+        UpdateStatusBar(u8"\u274C  Unknown error during duplicate search");
+        isFindDuplicatesRunning = false;
+        if (hFindDuplicatesButton) {
+            EnableWindow(hFindDuplicatesButton, TRUE);
+            SetWindowTextW(hFindDuplicatesButton, L"\U0001F50E  Find Duplicates");
+        }
     }
 }
 
@@ -911,6 +1019,94 @@ void MainForm::DisplayDuplicates(const std::vector<std::vector<FileMetadata>>& d
         LOG_ERROR("DisplayDuplicates exception: " + std::string(ex.what()));
     } catch (...) {
         LOG_ERROR("DisplayDuplicates unknown exception");
+    }
+}
+
+void MainForm::DisplayDuplicatesBatch(const std::vector<std::vector<FileMetadata>>& batch) {
+    LOG_INFO("DisplayDuplicatesBatch START - Batch size: " + std::to_string(batch.size()));
+    try {
+        // Get current item count to determine if this is the first batch
+        int currentCount = SendMessage(hResultsList, LB_GETCOUNT, 0, 0);
+        bool isFirstBatch = (currentCount <= 3);  // Only separator lines and search message
+
+        int nextGroupNum = 1;
+
+        if (isFirstBatch) {
+            // Add header for first batch
+            std::wstring headerSep = Utf8ToUtf16(u8"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
+
+            // Clear the initial message and rebuild
+            SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)headerSep.c_str());
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)(Utf8ToUtf16(u8"\U0001F50E  DUPLICATE FILES FOUND - Processing...")).c_str());
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)headerSep.c_str());
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"");
+        } else {
+            // Count existing groups in the listbox to continue numbering
+            int groupCount = 0;
+            for (int i = 0; i < currentCount; i++) {
+                int len = SendMessage(hResultsList, LB_GETTEXTLEN, i, 0);
+                if (len > 0) {
+                    std::vector<wchar_t> buf(len + 1);
+                    SendMessageW(hResultsList, LB_GETTEXT, i, (LPARAM)buf.data());
+                    std::wstring text(buf.data());
+                    // Count group headers that start with 📁 Group
+                    if (text.find(L"\U0001F4C1 Group") != std::string::npos) {
+                        groupCount++;
+                    }
+                }
+            }
+            nextGroupNum = groupCount + 1;
+        }
+
+        // Process batch items and append to listbox
+        for (const auto& group : batch) {
+            if (group.empty()) continue;
+
+            const auto& firstFile = group[0];
+            std::string filename = firstFile.filename;
+            std::string hashVal = firstFile.hashVal;
+
+            std::string headerStr = u8"\U0001F4C1 Group " + std::to_string(nextGroupNum) + ": " + filename +
+                                   " (" + std::to_string(group.size()) + " copies) [" +
+                                   (hashVal.length() > 8 ? hashVal.substr(0, 8) : hashVal) + "]";
+            std::wstring wheader = Utf8ToUtf16(headerStr);
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)wheader.c_str());
+
+            // Display each file in the group
+            for (size_t i = 0; i < group.size(); i++) {
+                const auto& file = group[i];
+                std::string sizeStr;
+                if (file.fileSize < 1024) {
+                    sizeStr = std::to_string(file.fileSize) + "B";
+                } else if (file.fileSize < 1024 * 1024) {
+                    sizeStr = std::to_string(file.fileSize / 1024) + "KB";
+                } else if (file.fileSize < 1024LL * 1024 * 1024) {
+                    sizeStr = std::to_string(file.fileSize / (1024 * 1024)) + "MB";
+                } else {
+                    sizeStr = std::to_string(file.fileSize / (1024LL * 1024 * 1024)) + "GB";
+                }
+
+                std::string itemStr = u8"    \u2022 [" + sizeStr + "] " + file.fullPath;
+                SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)Utf8ToUtf16(itemStr).c_str());
+            }
+
+            SendMessageW(hResultsList, LB_ADDSTRING, 0, (LPARAM)L"");
+            nextGroupNum++;
+        }
+
+        // Scroll listbox to show latest results
+        int itemCount = SendMessage(hResultsList, LB_GETCOUNT, 0, 0);
+        if (itemCount > 0) {
+            SendMessage(hResultsList, LB_SETCURSEL, itemCount - 1, 0);
+        }
+
+        LOG_INFO("DisplayDuplicatesBatch COMPLETE");
+
+    } catch (const std::exception& ex) {
+        LOG_ERROR("DisplayDuplicatesBatch exception: " + std::string(ex.what()));
+    } catch (...) {
+        LOG_ERROR("DisplayDuplicatesBatch unknown exception");
     }
 }
 

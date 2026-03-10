@@ -26,6 +26,8 @@ private:
     HWND hFileTypeEdit;
     HWND hResultsList;
     HWND hStatusBar;
+    HWND hExportButton;
+    HWND hClearAllButton;
     HWND hProgressBar;
     HWND hIncludeSubdirCheckbox;
     HWND hOverlayWindow = nullptr;  // Transparent overlay window
@@ -65,6 +67,8 @@ private:
     void OnStopScanClick();  // Handler for stop scan button click
     void OnScanComplete();
     void OnFindDuplicatesClick();  // Handler to find and display duplicates
+    void OnExportClick();           // Handler to export results to a text file
+    void OnClearAllClick();         // Handler for clear all button click
     void UpdateStatusBar(const std::string& message);
     void DisplayResults(const std::vector<FileMetadata>& files);
     void DisplayDuplicates(const std::vector<std::vector<FileMetadata>>& duplicateGroups);

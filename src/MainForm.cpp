@@ -331,16 +331,27 @@ void MainForm::OnWindowResize(int width, int height) {
 
     currentY += buttonHeight + spacing;
 
-    // ===== ROW 5: Results Label =====
-    HWND hResultsLabel = GetDlgItem(hMainWindow, 2000);  // Try to find existing label
+    // ===== ROW 5: Results Label and Export Button =====
+    HWND hResultsLabel = GetDlgItem(hMainWindow, 2000);
     if (!hResultsLabel) {
         hResultsLabel = CreateWindowExW(0, L"STATIC", L"\U0001F4CB  Results & Details:", // \U0001F4CB is CLIPBOARD (📋)
-                                       WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
+                                       WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE | SS_NOPREFIX,
                                        xMargin, currentY, 250, controlHeight, hMainWindow,
                                        (HMENU)2000, GetModuleHandle(nullptr), nullptr);
         LabelStyler::SetHeaderFont(hResultsLabel);
     } else {
         MoveWindow(hResultsLabel, xMargin, currentY, 250, controlHeight, TRUE);
+    }
+
+    int exportButtonWidth = 140;
+    if (!hExportButton) {
+        hExportButton = CreateWindowExW(0, L"BUTTON", L"\U0001F4E5  Export Results", // \U0001F4E5 is INBOX TRAY (📥)
+                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                       xMargin + 260, currentY, exportButtonWidth, controlHeight,
+                                       hMainWindow, (HMENU)1004, GetModuleHandle(nullptr), nullptr);
+        ButtonStyler::SetSecondaryStyle(hExportButton);
+    } else {
+        MoveWindow(hExportButton, xMargin + 260, currentY, exportButtonWidth, controlHeight, TRUE);
     }
 
     currentY += spacing;
@@ -361,15 +372,30 @@ void MainForm::OnWindowResize(int width, int height) {
 
     currentY += resultsHeight + spacing;
 
-    // ===== ROW 7: Status Bar (fixed at bottom) =====
+    // ===== ROW 7: Status Bar and Clear All Button (fixed at bottom) =====
+    int clearAllButtonWidth = 100;
+    int statusBarWidth = contentWidth - clearAllButtonWidth - 10;
+    
     if (!hStatusBar) {
         hStatusBar = CreateWindowExW(WS_EX_STATICEDGE, L"STATIC", L"\u2713 Ready", // \u2713 is CHECK MARK (✓)
                                    WS_CHILD | WS_VISIBLE | SS_SUNKEN | SS_CENTERIMAGE,
-                                   xMargin, height - controlHeight - xMargin, contentWidth, controlHeight,
+                                   xMargin, height - controlHeight - xMargin, statusBarWidth, controlHeight,
                                    hMainWindow, nullptr, GetModuleHandle(nullptr), nullptr);
         LabelStyler::SetNormalLabel(hStatusBar);
     } else {
-        MoveWindow(hStatusBar, xMargin, height - controlHeight - xMargin, contentWidth, controlHeight, TRUE);
+        MoveWindow(hStatusBar, xMargin, height - controlHeight - xMargin, statusBarWidth, controlHeight, TRUE);
+    }
+
+    if (!hClearAllButton) {
+        hClearAllButton = CreateWindowExW(0, L"BUTTON", L"\U0001F5D1  Clear all", // \U0001F5D1 is WASTEBASKET (🗑️)
+                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                         xMargin + statusBarWidth + 10, height - controlHeight - xMargin,
+                                         clearAllButtonWidth, controlHeight,
+                                         hMainWindow, (HMENU)1005, GetModuleHandle(nullptr), nullptr);
+        ButtonStyler::SetSecondaryStyle(hClearAllButton);
+    } else {
+        MoveWindow(hClearAllButton, xMargin + statusBarWidth + 10, height - controlHeight - xMargin,
+                   clearAllButtonWidth, controlHeight, TRUE);
     }
 
     LOG_DEBUG("OnWindowResize COMPLETE");
@@ -407,6 +433,10 @@ LRESULT MainForm::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 OnBrowseClick();
             } else if (wmId == 1003) {  // Find Duplicates button
                 OnFindDuplicatesClick();
+            } else if (wmId == 1004) {  // Export button
+                OnExportClick();
+            } else if (wmId == 1005) {  // Clear all button
+                OnClearAllClick();
             }
             break;
         }
@@ -1396,4 +1426,49 @@ LRESULT CALLBACK MainForm::OverlayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LP
     }
 
     return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+void MainForm::OnExportClick() {
+    if (!hResultsList) return;
+
+    int count = (int)SendMessage(hResultsList, LB_GETCOUNT, 0, 0);
+    if (count <= 0) {
+        MessageBoxW(hMainWindow, L"No results to export.", L"Export", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    FILE* fp = _wfopen(L"results.txt", L"w, ccs=UTF-8");
+    if (!fp) {
+        MessageBoxW(hMainWindow, L"Failed to create results.txt file.", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        int len = (int)SendMessage(hResultsList, LB_GETTEXTLEN, i, 0);
+        if (len > 0) {
+            std::vector<wchar_t> buf(len + 1);
+            SendMessageW(hResultsList, LB_GETTEXT, i, (LPARAM)buf.data());
+            fwprintf(fp, L"%ls\n", buf.data());
+        } else {
+            fwprintf(fp, L"\n");
+        }
+    }
+
+    fclose(fp);
+    MessageBoxW(hMainWindow, L"Results exported successfully to results.txt", L"Success", MB_OK | MB_ICONINFORMATION);
+}
+void MainForm::OnClearAllClick() {
+    if (MessageBoxW(hMainWindow, L"Are you sure you want to clear all data from the database?", 
+                    L"Confirm Clear", MB_YESNO | MB_ICONWARNING) == IDYES) {
+        
+        if (dbManager->ClearAllData()) {
+            // Clear the UI as well
+            if (hResultsList) {
+                SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
+            }
+            UpdateStatusBar("\u2713 Database cleared successfully.");
+            MessageBoxW(hMainWindow, L"All data has been deleted.", L"Success", MB_OK | MB_ICONINFORMATION);
+        } else {
+            MessageBoxW(hMainWindow, L"Failed to clear database data.", L"Error", MB_OK | MB_ICONERROR);
+        }
+    }
 }

@@ -1093,7 +1093,7 @@ void MainForm::DisplayDuplicatesBatch(const std::vector<std::vector<FileMetadata
     LOG_INFO("DisplayDuplicatesBatch START - Batch size: " + std::to_string(batch.size()));
     try {
         // Get current item count to determine if this is the first batch
-        int currentCount = SendMessage(hResultsList, LB_GETCOUNT, 0, 0);
+        int currentCount = static_cast<int>(SendMessage(hResultsList, LB_GETCOUNT, 0, 0));
         bool isFirstBatch = (currentCount <= 3);  // Only separator lines and search message
 
         int nextGroupNum = 1;
@@ -1430,7 +1430,7 @@ LRESULT CALLBACK MainForm::OverlayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LP
 void MainForm::OnExportClick() {
     if (!hResultsList) return;
 
-    int count = (int)SendMessage(hResultsList, LB_GETCOUNT, 0, 0);
+    int count = static_cast<int>(SendMessage(hResultsList, LB_GETCOUNT, 0, 0));
     if (count <= 0) {
         MessageBoxW(hMainWindow, L"No results to export.", L"Export", MB_OK | MB_ICONINFORMATION);
         return;
@@ -1443,7 +1443,7 @@ void MainForm::OnExportClick() {
     }
 
     for (int i = 0; i < count; ++i) {
-        int len = (int)SendMessage(hResultsList, LB_GETTEXTLEN, i, 0);
+        int len = static_cast<int>(SendMessage(hResultsList, LB_GETTEXTLEN, i, 0));
         if (len > 0) {
             std::vector<wchar_t> buf(len + 1);
             SendMessageW(hResultsList, LB_GETTEXT, i, (LPARAM)buf.data());
@@ -1465,7 +1465,7 @@ void MainForm::OnClearAllClick() {
             if (hResultsList) {
                 SendMessage(hResultsList, LB_RESETCONTENT, 0, 0);
             }
-            UpdateStatusBar("\u2713 Database cleared successfully.");
+            UpdateStatusBar("Database cleared successfully.");
             MessageBoxW(hMainWindow, L"All data has been deleted.", L"Success", MB_OK | MB_ICONINFORMATION);
         } else {
             MessageBoxW(hMainWindow, L"Failed to clear database data.", L"Error", MB_OK | MB_ICONERROR);

@@ -30,6 +30,7 @@ bool DatabaseManager::InitializeDatabase(const std::string& dbPath) {
     sqlite3_exec(db, "PRAGMA synchronous = FULL;", nullptr, nullptr, nullptr);  // Ensure data is synced to disk
     sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);    // Write-Ahead Logging
     sqlite3_exec(db, "PRAGMA foreign_keys = ON;", nullptr, nullptr, nullptr);     // Enable foreign keys
+    sqlite3_exec(db, "PRAGMA auto_vacuum = FULL;", nullptr, nullptr, nullptr);    // Automatic space recovery
     LOG_DEBUG("Database pragmas set");
 
     bool tablesCreated = CreateTables();

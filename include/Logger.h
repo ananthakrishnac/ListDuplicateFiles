@@ -8,6 +8,8 @@
 #include <windows.h>
 #include <cstdlib>
 #include <io.h>
+#include <vector>
+#include <algorithm>
 
 class Logger {
 public:
@@ -137,15 +139,56 @@ private:
         return oss.str();
     }
 
+    void PruneLogs(const std::string& dirPath) {
+        std::string searchPath = dirPath + "\\log_FileExplorer_*.txt";
+        WIN32_FIND_DATAA findData;
+        HANDLE hFind = FindFirstFileA(searchPath.c_str(), &findData);
+
+        if (hFind == INVALID_HANDLE_VALUE) return;
+
+        std::vector<std::string> logFiles;
+        do {
+            if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                logFiles.push_back(findData.cFileName);
+            }
+        } while (FindNextFileA(hFind, &findData));
+        FindClose(hFind);
+
+        // Sort files by name (timestamp format ensures correct chronological order)
+        // log_FileExplorer_YYYYMMDD_HHMMSS.txt
+        std::sort(logFiles.begin(), logFiles.end());
+
+        // Keep last 5 logs (including the one we are about to create, so we prune if > 4)
+        // Wait, the new log is not created yet. So if we have 4, and we add 1, we have 5.
+        // If we have 5, we should delete the oldest one before creating.
+        if (logFiles.size() >= 5) {
+            size_t toDelete = logFiles.size() - 4; // Keep 4 existing + 1 new = 5
+            for (size_t i = 0; i < toDelete; ++i) {
+                std::string fullPath = dirPath + "\\" + logFiles[i];
+                DeleteFileA(fullPath.c_str());
+            }
+        }
+    }
+
     Logger() {
         // Create log file in AppData\Local\FileExplorer using environment variable
         const char* appDataLocal = std::getenv("LOCALAPPDATA");
+        std::string dirPath;
         if (appDataLocal) {
-            logPath = std::string(appDataLocal) + "\\FileExplorer\\log_FileExplorer.txt";
-
-            // Create directory if it doesn't exist
-            std::string dirPath = std::string(appDataLocal) + "\\FileExplorer";
+            dirPath = std::string(appDataLocal) + "\\FileExplorer";
             CreateDirectoryA(dirPath.c_str(), nullptr);
+            
+            // Prune old logs before creating a new one
+            PruneLogs(dirPath);
+
+            // Generate unique filename with timestamp
+            time_t now = time(nullptr);
+            struct tm timeinfo;
+            localtime_s(&timeinfo, &now);
+            char timeBuf[32];
+            strftime(timeBuf, sizeof(timeBuf), "%Y%m%d_%H%M%S", &timeinfo);
+            
+            logPath = dirPath + "\\log_FileExplorer_" + std::string(timeBuf) + ".txt";
         } else {
             logPath = "log_FileExplorer.txt";
         }

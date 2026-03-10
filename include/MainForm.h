@@ -28,6 +28,10 @@ private:
     HWND hStatusBar;
     HWND hProgressBar;
     HWND hIncludeSubdirCheckbox;
+    HWND hOverlayWindow = nullptr;  // Transparent overlay window
+    HICON hLeftArrowIcon = nullptr; // Left arrow icon for overlay
+    HICON hRightArrowIcon = nullptr; // Right arrow icon for overlay
+    HICON hUpArrowIcon = nullptr;   // Up arrow icon for overlay
 
     std::unique_ptr<FileScanner> fileScanner;
     std::unique_ptr<DatabaseManager> dbManager;
@@ -44,9 +48,17 @@ private:
     volatile bool isFindDuplicatesRunning = false;  // Flag to control find duplicates state
     std::thread* pFindDuplicatesThread = nullptr;   // Pointer to background find duplicates thread
 
+    // Overlay overlay members
+    volatile bool isOverlayVisible = true;    // Flag to show/hide overlay on startup
+
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK OverlayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
     void OnWindowResize(int width, int height);
+
+    void CreateOverlayWindow();
+    void DestroyOverlayWindow();
+    void OnOverlayClick();
 
     void OnBrowseClick();
     void OnScanClick();

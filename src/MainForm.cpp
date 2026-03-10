@@ -77,6 +77,12 @@ MainForm::~MainForm() {
         pFindDuplicatesThread = nullptr;
     }
 
+    // Clean up overlay window
+    if (hOverlayWindow) {
+        DestroyWindow(hOverlayWindow);
+        hOverlayWindow = nullptr;
+    }
+
     if (hMainWindow) {
         DestroyWindow(hMainWindow);
     }
@@ -138,6 +144,11 @@ bool MainForm::Create() {
         ShowWindow(hMainWindow, SW_SHOW);
         UpdateWindow(hMainWindow);
 
+        // Create and show the transparent overlay on startup
+        // Small delay to ensure window is fully rendered before overlay
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        CreateOverlayWindow();
+
         LOG_INFO("MainForm::Create COMPLETE");
         return true;
     } catch (const std::exception& ex) {
@@ -175,7 +186,7 @@ void MainForm::OnWindowResize(int width, int height) {
     // Label with modern styling
     if (!hPathEdit) {  // Only create once
         HWND hPathLabel = CreateWindowExW(0, L"STATIC", L"Folder Path:",
-                                          WS_CHILD | WS_VISIBLE,
+                                          WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
                                           xMargin, currentY, 120, controlHeight, hMainWindow, nullptr,
                                           GetModuleHandle(nullptr), nullptr);
         LabelStyler::SetSectionTitle(hPathLabel);
@@ -229,7 +240,7 @@ void MainForm::OnWindowResize(int width, int height) {
     // ===== ROW 2: File Extensions =====
     if (!hFileTypeEdit) {
         HWND hExtLabel = CreateWindowExW(0, L"STATIC", L"File Types (comma-separated):",
-                                         WS_CHILD | WS_VISIBLE,
+                                         WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
                                          xMargin, currentY, 300, controlHeight, hMainWindow, nullptr,
                                          GetModuleHandle(nullptr), nullptr);
         LabelStyler::SetSectionTitle(hExtLabel);
@@ -269,7 +280,7 @@ void MainForm::OnWindowResize(int width, int height) {
                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                                     xMargin, currentY, buttonWidth, buttonHeight, hMainWindow,
                                     (HMENU)1000, GetModuleHandle(nullptr), nullptr);
-        ButtonStyler::SetPrimaryStyle(hScanButton);
+        ButtonStyler::SetSecondaryStyle(hScanButton);
 
         // Load search icon from file and display on button with text
         HICON hIcon = (HICON)LoadImageW(nullptr, L"icons\\search.ico",
@@ -324,7 +335,7 @@ void MainForm::OnWindowResize(int width, int height) {
     HWND hResultsLabel = GetDlgItem(hMainWindow, 2000);  // Try to find existing label
     if (!hResultsLabel) {
         hResultsLabel = CreateWindowExW(0, L"STATIC", L"\U0001F4CB  Results & Details:", // \U0001F4CB is CLIPBOARD (📋)
-                                       WS_CHILD | WS_VISIBLE,
+                                       WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
                                        xMargin, currentY, 250, controlHeight, hMainWindow,
                                        (HMENU)2000, GetModuleHandle(nullptr), nullptr);
         LabelStyler::SetHeaderFont(hResultsLabel);
@@ -353,7 +364,7 @@ void MainForm::OnWindowResize(int width, int height) {
     // ===== ROW 7: Status Bar (fixed at bottom) =====
     if (!hStatusBar) {
         hStatusBar = CreateWindowExW(WS_EX_STATICEDGE, L"STATIC", L"\u2713 Ready", // \u2713 is CHECK MARK (✓)
-                                   WS_CHILD | WS_VISIBLE | SS_SUNKEN,
+                                   WS_CHILD | WS_VISIBLE | SS_SUNKEN | SS_CENTERIMAGE,
                                    xMargin, height - controlHeight - xMargin, contentWidth, controlHeight,
                                    hMainWindow, nullptr, GetModuleHandle(nullptr), nullptr);
         LabelStyler::SetNormalLabel(hStatusBar);
@@ -403,6 +414,32 @@ LRESULT MainForm::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             int width = GET_X_LPARAM(lParam);
             int height = GET_Y_LPARAM(lParam);
             OnWindowResize(width, height);
+
+            // Resize overlay window to match main window's client area
+            if (hOverlayWindow && isOverlayVisible) {
+                RECT clientRect;
+                GetClientRect(hMainWindow, &clientRect);
+                POINT clientOrigin = { 0, 0 };
+                ClientToScreen(hMainWindow, &clientOrigin);
+
+                SetWindowPos(hOverlayWindow, HWND_TOP, clientOrigin.x, clientOrigin.y,
+                           clientRect.right - clientRect.left, clientRect.bottom - clientRect.top,
+                           SWP_SHOWWINDOW | SWP_NOACTIVATE);
+            }
+            break;
+        }
+        case WM_MOVE: {
+            // Keep overlay positioned with main window's client area when it moves
+            if (hOverlayWindow && isOverlayVisible) {
+                RECT clientRect;
+                GetClientRect(hMainWindow, &clientRect);
+                POINT clientOrigin = { 0, 0 };
+                ClientToScreen(hMainWindow, &clientOrigin);
+
+                SetWindowPos(hOverlayWindow, HWND_TOP, clientOrigin.x, clientOrigin.y,
+                           clientRect.right - clientRect.left, clientRect.bottom - clientRect.top,
+                           SWP_SHOWWINDOW | SWP_NOACTIVATE);
+            }
             break;
         }
         case WM_DESTROY:
@@ -1125,4 +1162,238 @@ std::wstring MainForm::Utf8ToUtf16(const std::string& utf8Str) {
     std::wstring wstrTo(size_needed, 0);
     MultiByteToWideChar(CP_UTF8, 0, &utf8Str[0], (int)utf8Str.size(), &wstrTo[0], size_needed);
     return wstrTo;
+}
+
+void MainForm::CreateOverlayWindow() {
+    if (!isOverlayVisible) return;
+
+    LOG_INFO("CreateOverlayWindow START");
+
+    // Register overlay window class
+    static bool classRegistered = false;
+    if (!classRegistered) {
+        WNDCLASSEX wcex = {};
+        wcex.cbSize = sizeof(WNDCLASSEX);
+        wcex.style = CS_HREDRAW | CS_VREDRAW;
+        wcex.lpfnWndProc = OverlayWndProc;
+        wcex.hInstance = GetModuleHandle(nullptr);
+        wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wcex.hbrBackground = CreateSolidBrush(RGB(0, 0, 0));
+        wcex.lpszClassName = L"OverlayWindow";
+
+        if (!RegisterClassEx(&wcex)) {
+            LOG_ERROR("Failed to register overlay window class");
+            return;
+        }
+        classRegistered = true;
+    }
+
+    // Get main window position and size
+    RECT windowRect;
+    GetWindowRect(hMainWindow, &windowRect);
+    int windowX = windowRect.left;
+    int windowY = windowRect.top;
+
+    // Get client area of main window (excludes title bar and borders)
+    RECT clientRect;
+    GetClientRect(hMainWindow, &clientRect);
+    int clientWidth = clientRect.right - clientRect.left;
+    int clientHeight = clientRect.bottom - clientRect.top;
+
+    // Convert client coordinates to screen coordinates
+    POINT clientOrigin = { 0, 0 };
+    ClientToScreen(hMainWindow, &clientOrigin);
+
+    // Create overlay as a top-level layered window positioned over main window's client area
+    hOverlayWindow = CreateWindowExW(WS_EX_LAYERED, L"OverlayWindow", L"",
+                                     WS_POPUP | WS_VISIBLE,
+                                     clientOrigin.x, clientOrigin.y, clientWidth, clientHeight,
+                                     nullptr, nullptr,
+                                     GetModuleHandle(nullptr), this);
+
+    if (hOverlayWindow) {
+        LOG_INFO("Overlay window created");
+
+        // Load specific icon files for arrows on overlay
+        hLeftArrowIcon = (HICON)LoadImageW(nullptr, L"icons\\left.ico", IMAGE_ICON, 48, 48, LR_LOADFROMFILE);
+        hRightArrowIcon = (HICON)LoadImageW(nullptr, L"icons\\right.ico", IMAGE_ICON, 48, 48, LR_LOADFROMFILE);
+        hUpArrowIcon = (HICON)LoadImageW(nullptr, L"icons\\up.ico", IMAGE_ICON, 48, 48, LR_LOADFROMFILE);
+
+        if (!hLeftArrowIcon || !hRightArrowIcon || !hUpArrowIcon) {
+            LOG_WARNING("Failed to load some overlay arrow icons");
+        }
+
+        // Set layered window attributes for semi-transparent black overlay
+        // Alpha = 150 out of 255 (approximately 60% opacity)
+        SetLayeredWindowAttributes(hOverlayWindow, 0, 150, LWA_ALPHA);
+
+        // Set window to top-z order
+        SetWindowPos(hOverlayWindow, HWND_TOP, clientOrigin.x, clientOrigin.y, clientWidth, clientHeight, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        UpdateWindow(hOverlayWindow);
+
+        LOG_INFO("Overlay window created and shown");
+    } else {
+        LOG_ERROR("Failed to create overlay window");
+    }
+}
+
+void MainForm::DestroyOverlayWindow() {
+    if (hOverlayWindow) {
+        LOG_INFO("Destroying overlay window");
+        
+        // Clean up icons
+        if (hLeftArrowIcon) { DestroyIcon(hLeftArrowIcon); hLeftArrowIcon = nullptr; }
+        if (hRightArrowIcon) { DestroyIcon(hRightArrowIcon); hRightArrowIcon = nullptr; }
+        if (hUpArrowIcon) { DestroyIcon(hUpArrowIcon); hUpArrowIcon = nullptr; }
+        
+        DestroyWindow(hOverlayWindow);
+        hOverlayWindow = nullptr;
+        isOverlayVisible = false;
+    }
+}
+
+void MainForm::OnOverlayClick() {
+    LOG_INFO("Overlay clicked - removing overlay");
+    DestroyOverlayWindow();
+}
+
+LRESULT CALLBACK MainForm::OverlayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    MainForm* pThis = nullptr;
+
+    if (msg == WM_CREATE) {
+        CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
+        pThis = reinterpret_cast<MainForm*>(pCreate->lpCreateParams);
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pThis);
+    } else {
+        pThis = reinterpret_cast<MainForm*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+    }
+
+    if (pThis) {
+        switch (msg) {
+            case WM_PAINT:
+                {
+                    PAINTSTRUCT ps;
+                    HDC hdc = BeginPaint(hWnd, &ps);
+
+                    RECT rect;
+                    GetClientRect(hWnd, &rect);
+                    int width = rect.right - rect.left;
+                    int height = rect.bottom - rect.top;
+
+                    // Fill with semi-transparent black background
+                    HBRUSH hBrush = CreateSolidBrush(RGB(0, 0, 0));
+                    FillRect(hdc, &rect, hBrush);
+                    DeleteObject(hBrush);
+
+                    // Draw instructional text with white color
+                    SetBkMode(hdc, TRANSPARENT);
+                    SetTextColor(hdc, RGB(255, 255, 255));
+
+                    // Create fonts
+                    HFONT hTextFont = CreateFontW(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                                 CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                                 DEFAULT_PITCH | FF_SWISS, L"Arial");
+
+                    HFONT hArrowFont = CreateFontW(56, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                                  CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                                  DEFAULT_PITCH | FF_SWISS, L"Arial");
+
+                    HFONT hOldFont = (HFONT)SelectObject(hdc, hTextFont);
+
+                    // Use same layout as the app controls
+                    int xMargin = LayoutHelper::MARGIN;
+                    int yMargin = LayoutHelper::MARGIN;
+                    int controlHeight = LayoutHelper::CONTROL_HEIGHT;
+                    int spacing = LayoutHelper::SPACING;
+                    int buttonHeight = LayoutHelper::BUTTON_HEIGHT;
+                    int contentWidth = width - (2 * xMargin);
+                    int buttonWidth = (contentWidth - 10) / 2;
+
+                    int currentY = yMargin;
+
+                    // STEP 1: Start here (at Folder Path / Browse button)
+                    std::wstring step1 = L"STEP 1: Start here";
+                    SetTextColor(hdc, RGB(255, 255, 255));
+                    SelectObject(hdc, hTextFont);
+                    TextOutW(hdc, width - xMargin - 520, currentY + 5, step1.c_str(), (int)step1.length());
+                    
+                    if (pThis->hRightArrowIcon) {
+                        DrawIconEx(hdc, width - xMargin - 180, currentY - 5, pThis->hRightArrowIcon, 48, 48, 0, nullptr, DI_NORMAL);
+                    }
+
+                    currentY += spacing;
+
+                    // STEP 2: Add / Delete file types (at File Types field)
+                    std::wstring step2 = L"STEP 2: Add / Delete file types";
+                    SetTextColor(hdc, RGB(255, 255, 255));
+                    SelectObject(hdc, hTextFont);
+                    TextOutW(hdc, xMargin + 580, currentY + 5, step2.c_str(), (int)step2.length());
+                    
+                    if (pThis->hLeftArrowIcon) {
+                        DrawIconEx(hdc, xMargin + 480, currentY - 5, pThis->hLeftArrowIcon, 48, 48, 0, nullptr, DI_NORMAL);
+                    }
+
+                    currentY += spacing;
+
+                    // STEP 3: SCAN (at Scan button)
+                    std::wstring step3 = L"STEP 3: SCAN";
+                    SetTextColor(hdc, RGB(255, 255, 255));
+                    SelectObject(hdc, hTextFont);
+                    TextOutW(hdc, xMargin + 100, currentY + 120, step3.c_str(), (int)step3.length());
+                    
+                    if (pThis->hUpArrowIcon) {
+                        DrawIconEx(hdc, xMargin + 380, currentY + 110, pThis->hUpArrowIcon, 48, 48, 0, nullptr, DI_NORMAL);
+                    }
+
+                    // STEP 5: Find Duplicates (at Find Duplicates button)
+                    std::wstring step5 = L"STEP 5: Find Duplicates";
+                    SetTextColor(hdc, RGB(255, 255, 255));
+                    SelectObject(hdc, hTextFont);
+                    int rightX = xMargin + buttonWidth + 10;
+                    TextOutW(hdc, rightX + 100, currentY + 120, step5.c_str(), (int)step5.length());
+                    
+                    if (pThis->hUpArrowIcon) {
+                        DrawIconEx(hdc, rightX + 40, currentY + 110, pThis->hUpArrowIcon, 48, 48, 0, nullptr, DI_NORMAL);
+                    }
+
+                    currentY += buttonHeight + spacing;
+
+                    // STEP 4: Repeat STEP 1,2,3... (in the large results area)
+                    SetTextColor(hdc, RGB(255, 255, 255));
+                    SelectObject(hdc, hTextFont);
+                    int step4Y = currentY + 120;
+                    std::wstring step4a = L"STEP 4: Repeat STEP 1,2,3 with different folders";
+                    std::wstring step4b = L"you like to scan to find duplicates across in them";
+                    
+                    // Center step 4 text
+                    SIZE sz4a, sz4b;
+                    GetTextExtentPoint32W(hdc, step4a.c_str(), (int)step4a.length(), &sz4a);
+                    GetTextExtentPoint32W(hdc, step4b.c_str(), (int)step4b.length(), &sz4b);
+                    
+                    TextOutW(hdc, (width - sz4a.cx) / 2, step4Y, step4a.c_str(), (int)step4a.length());
+                    TextOutW(hdc, (width - sz4b.cx) / 2, step4Y + 60, step4b.c_str(), (int)step4b.length());
+
+                    SelectObject(hdc, hOldFont);
+                    DeleteObject(hTextFont);
+                    DeleteObject(hArrowFont);
+
+                    EndPaint(hWnd, &ps);
+                }
+                return 0;
+
+            case WM_LBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+            case WM_MBUTTONDOWN:
+            case WM_LBUTTONDBLCLK:
+                pThis->OnOverlayClick();
+                return 0;
+
+            default:
+                return DefWindowProc(hWnd, msg, wParam, lParam);
+        }
+    }
+
+    return DefWindowProc(hWnd, msg, wParam, lParam);
 }
